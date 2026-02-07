@@ -78,6 +78,8 @@ This configures a git filter so that when you `git add` a notebook, its outputs 
 The location tracking module allows for the analysis of a single animal's location on a frame by frame basis. In addition to providing the user the with the ability to crop the portion of the video frame in which the animal will be, it also allows the user to specify regions of interest (e.g. left and right sides) and provides tools to quantify the time spent in each region, as well as distance travelled.  
 ![schematic_lt](../master/Images/LocationTracking_Schematic.png)
 
+NOTE: Due to the way the COM is calculated it is important that the starting frames of the video include the object you are wishing to track, especially when the contrast between shadows and your target object is minimal.
+
 # Freeze Analysis Module
 
 The freeze analysis module allows the user to automatically score an animal's motion and freezing while in a conditioning chamber. It was designed with side-view recording in mind, and with the intention of being able to crop the top of a video frame to remove the influence of fiberoptic/miniscope cables. In the case where no cables are to be used, recording should be capable from above the animal.  
