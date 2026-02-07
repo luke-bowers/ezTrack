@@ -54,7 +54,71 @@ warnings.filterwarnings("ignore")
 
 
 
-########################################################################################    
+########################################################################################
+
+
+def _frame_to_tracking_channel(frame, video_dict):
+    """
+    Convert a BGR frame to the single channel used for tracking (gray or red).
+    If video_dict.get('use_red_channel', False) is True, returns the red channel;
+    otherwise returns grayscale. Return value is 2D, same dtype/shape semantics
+    as grayscale for downstream resize, crop, diff, mask, display.
+    """
+    if video_dict.get('use_red_channel', False):
+        return frame[:, :, 2].copy()
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+def _preprocess_tracking_channel(channel, tracking_params):
+    """
+    Optional preprocessing on the 2D tracking channel to improve threshold stability.
+
+    Keys read from tracking_params (all optional):
+      - pre_blur_ksize (int): Gaussian blur kernel size (odd). 0/None disables.
+      - use_clahe (bool): enable CLAHE local contrast normalization.
+      - clahe_clip (float): CLAHE clipLimit.
+      - clahe_grid (tuple[int,int]): CLAHE tileGridSize.
+
+    Returns a 2D uint8 image suitable for downstream OpenCV operations.
+    """
+    if channel is None or tracking_params is None:
+        return channel
+
+    # Ensure uint8 for OpenCV ops (CLAHE requires uint8)
+    if channel.dtype != np.uint8:
+        channel_u8 = np.clip(channel, 0, 255).astype(np.uint8)
+    else:
+        channel_u8 = channel
+
+    k = tracking_params.get('pre_blur_ksize', 0)
+    try:
+        k = int(k) if k is not None else 0
+    except Exception:
+        k = 0
+
+    if k and k > 1:
+        if k % 2 == 0:
+            k += 1
+        channel_u8 = cv2.GaussianBlur(channel_u8, (k, k), 0)
+
+    if bool(tracking_params.get('use_clahe', False)):
+        try:
+            clip = float(tracking_params.get('clahe_clip', 2.0))
+        except Exception:
+            clip = 2.0
+        grid = tracking_params.get('clahe_grid', (8, 8))
+        try:
+            grid = tuple(grid)
+            if len(grid) != 2:
+                grid = (8, 8)
+        except Exception:
+            grid = (8, 8)
+
+        clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=grid)
+        channel_u8 = clahe.apply(channel_u8)
+
+    return channel_u8
+
+
 
 def LoadAndCrop(video_dict,cropmethod=None,fstfile=False,accept_p_frames=False):
     """ 
@@ -208,7 +272,7 @@ def LoadAndCrop(video_dict,cropmethod=None,fstfile=False,accept_p_frames=False):
     #Set first frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, video_dict['start']) 
     ret, frame = cap.read() 
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    frame = _frame_to_tracking_channel(frame, video_dict)
     if (video_dict['dsmpl'] < 1):
         frame = cv2.resize(
                     frame,
@@ -291,7 +355,7 @@ def cropframe(frame, crop=None):
 ########################################################################################
 
 def Reference(video_dict,num_frames=100,
-              altfile=False,fstfile=False,frames=None):
+              altfile=False,fstfile=False,frames=None, tracking_params=None):
     """ 
     -------------------------------------------------------------------------------------
     
@@ -386,7 +450,7 @@ def Reference(video_dict,num_frames=100,
     
     #Get video dimensions with any cropping applied
     ret, frame = cap.read()
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    frame = _frame_to_tracking_channel(frame, video_dict)
     if (video_dict['dsmpl'] < 1):
         frame = cv2.resize(
                     frame,
@@ -399,6 +463,8 @@ def Reference(video_dict,num_frames=100,
         frame, 
         video_dict.get('crop')
     )
+    
+    frame = _preprocess_tracking_channel(frame, tracking_params)
     h,w = frame.shape[0], frame.shape[1]
     cap_max = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
     cap_max = int(video_dict['end']) if video_dict['end'] is not None else cap_max
@@ -417,7 +483,7 @@ def Reference(video_dict,num_frames=100,
             cap.set(cv2.CAP_PROP_POS_FRAMES, framenum)
             ret, frame = cap.read()
             if ret == True:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray = _frame_to_tracking_channel(frame, video_dict)
                 if (video_dict['dsmpl'] < 1):
                     gray = cv2.resize(
                         gray,
@@ -430,6 +496,8 @@ def Reference(video_dict,num_frames=100,
                     gray, 
                     video_dict.get('crop')
                 )
+                
+                gray = _preprocess_tracking_channel(gray, tracking_params)
                 collection[idx,:,:]=gray
                 grabbed = True
             elif ret == False:
@@ -574,7 +642,7 @@ def Locate(cap,tracking_params,video_dict,prior=None):
 
     if ret == True:
         
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame = _frame_to_tracking_channel(frame, video_dict)
         if (video_dict['dsmpl'] < 1):
             frame = cv2.resize(
                 frame,
@@ -587,15 +655,22 @@ def Locate(cap,tracking_params,video_dict,prior=None):
             frame,
             video_dict.get('crop')
         )
-        
-        #find difference from reference
+        frame = _preprocess_tracking_channel(frame, tracking_params)
+
+        #find difference from reference (OpenCV-safe to avoid uint8 wraparound)
+        ref = video_dict['reference']
+        ref_u8 = np.clip(ref, 0, 255).astype(frame.dtype)
+
         if tracking_params['method'] == 'abs':
-            dif = np.absolute(frame-video_dict['reference'])
+            dif = cv2.absdiff(frame, ref_u8)
         elif tracking_params['method'] == 'light':
-            dif = frame-video_dict['reference']
+            dif = cv2.subtract(frame, ref_u8)      # saturates at 0
         elif tracking_params['method'] == 'dark':
-            dif = video_dict['reference']-frame
-        dif = dif.astype('int16')
+            dif = cv2.subtract(ref_u8, frame)      # saturates at 0
+        else:
+            raise ValueError("Unknown tracking method: {m}".format(m=tracking_params['method']))
+
+        dif = dif.astype(np.float32)
         if 'mask' in video_dict.keys():
             if video_dict['mask']['mask'] is not None:
                     dif[video_dict['mask']['mask']] = 0
@@ -609,22 +684,101 @@ def Locate(cap,tracking_params,video_dict,prior=None):
                         slice(xmin if xmin>0 else 0, xmax)]=1
             dif = dif*dif_weights
             
-        #threshold differences and find center of mass for remaining values
-        dif[dif<np.percentile(dif,tracking_params['loc_thresh'])]=0
-        
-        #remove influence of wire
-        if tracking_params['rmv_wire'] == True:
-            ksize = tracking_params['wire_krn']
+        #threshold differences -> binary mask (more stable than raw-intensity CoM)
+        if np.max(dif) <= 0:
+            bw = np.zeros_like(dif, dtype=np.uint8)
+            if prior is not None:
+                com = (float(prior[0]), float(prior[1]))
+            else:
+                com = (np.nan, np.nan)
+            return ret, bw, com, frame
+
+        # Use non-zero dif values for percentile so large zero regions don't collapse the threshold
+        vals = dif[dif > 0]
+        if vals.size == 0:
+            bw = np.zeros_like(dif, dtype=np.uint8)
+            if prior is not None:
+                com = (float(prior[0]), float(prior[1]))
+            else:
+                com = (np.nan, np.nan)
+            return ret, bw, com, frame
+
+        thr = np.percentile(vals, tracking_params['loc_thresh'])
+        bw = (dif >= thr).astype(np.uint8) * 255
+
+        #remove influence of wire (operate on binary mask)
+        if tracking_params.get('rmv_wire', False):
+            ksize = int(tracking_params.get('wire_krn', 5))
             kernel = np.ones((ksize,ksize),np.uint8)
-            dif_wirermv = cv2.morphologyEx(dif, cv2.MORPH_OPEN, kernel)
-            krn_violation =  dif_wirermv.sum()==0
-            dif = dif if krn_violation else dif_wirermv
+            bw_wirermv = cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel)
+            krn_violation =  bw_wirermv.sum()==0
+            bw = bw if krn_violation else bw_wirermv
             if krn_violation:
                 print("WARNING: wire_krn too large. Reverting to rmv_wire=False for frame {x}".format(
                     x= int(cap.get(cv2.CAP_PROP_POS_FRAMES)-1-video_dict['start'])))
-            
-        com=ndimage.measurements.center_of_mass(dif)
-        return ret, dif, com, frame
+
+        # generic cleanup (optional)
+        open_k = tracking_params.get('post_open_ksize', 0)
+        close_k = tracking_params.get('post_close_ksize', 0)
+        try:
+            open_k = int(open_k) if open_k is not None else 0
+        except Exception:
+            open_k = 0
+        try:
+            close_k = int(close_k) if close_k is not None else 0
+        except Exception:
+            close_k = 0
+
+        if open_k and open_k > 1:
+            bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
+        if close_k and close_k > 1:
+            bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
+
+        # optional: constrain to dark pixels (mouse is dark)
+        dark_thr = tracking_params.get('dark_pixel_thr', None)
+        if dark_thr is not None:
+            try:
+                dark_thr = int(dark_thr)
+                dark_mask = (frame <= dark_thr).astype(np.uint8) * 255
+                bw = cv2.bitwise_and(bw, dark_mask)
+            except Exception:
+                pass
+
+        # connected components: pick best blob centroid
+        num, labels, stats, centroids = cv2.connectedComponentsWithStats(bw, connectivity=8)
+        if num <= 1:
+            if prior is not None:
+                com = (float(prior[0]), float(prior[1]))
+            else:
+                com = ndimage.measurements.center_of_mass(dif)
+            return ret, bw, com, frame
+
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        idxs = np.arange(1, num)
+
+        min_a = tracking_params.get('min_blob_area', 0)
+        max_a = tracking_params.get('max_blob_area', 1e9)
+        try:
+            min_a = int(min_a) if min_a is not None else 0
+        except Exception:
+            min_a = 0
+        try:
+            max_a = int(max_a) if max_a is not None else int(1e9)
+        except Exception:
+            max_a = int(1e9)
+
+        ok = (areas >= min_a) & (areas <= max_a)
+        cand = idxs[ok] if np.any(ok) else idxs
+
+        if prior is not None and tracking_params.get('use_window', False):
+            d2 = (centroids[cand, 0] - prior[1])**2 + (centroids[cand, 1] - prior[0])**2
+            best = cand[int(np.argmin(d2))]
+        else:
+            cand_areas = stats[cand, cv2.CC_STAT_AREA]
+            best = cand[int(np.argmax(cand_areas))]
+
+        com = (float(centroids[best, 1]), float(centroids[best, 0]))  # (y, x)
+        return ret, bw, com, frame
     
     else:
         return ret, None, None, frame
@@ -928,7 +1082,10 @@ def LocationThresh_View(video_dict,tracking_params,examples=4):
             color='red',size=20,marker='+',line_width=3) 
         
         #plot heatmap
-        dif = dif*(255//dif.max())
+        if dif is None or np.max(dif) == 0:
+            dif = np.zeros_like(frame, dtype=np.uint8)
+        else:
+            dif = (dif.astype(np.float32) * (255.0/np.max(dif))).astype(np.uint8)
         image_heat = hv.Image((
             np.arange(dif.shape[1]), 
             np.arange(dif.shape[0]), 
@@ -1729,7 +1886,7 @@ def PlayVideo(video_dict,display_dict,location):
     cap = cv2.VideoCapture(video_dict['fpath'])#set file\
     if display_dict['save_video']==True:
         ret, frame = cap.read() #read frame
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame = _frame_to_tracking_channel(frame, video_dict)
         if (video_dict['dsmpl'] < 1):
             frame = cv2.resize(
                 frame,
@@ -1753,7 +1910,7 @@ def PlayVideo(video_dict,display_dict,location):
     for f in range(display_dict['start'],display_dict['stop']):
         ret, frame = cap.read() #read frame
         if ret == True:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame = _frame_to_tracking_channel(frame, video_dict)
             if (video_dict['dsmpl'] < 1):
                 frame = cv2.resize(
                     frame,
@@ -1874,7 +2031,7 @@ def PlayVideo_ext(video_dict,display_dict,location,crop=None):
     cap = cv2.VideoCapture(video_dict['fpath'])#set file\
     if display_dict['save_video']==True:
         ret, frame = cap.read() #read frame
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame = _frame_to_tracking_channel(frame, video_dict)
         if (video_dict['dsmpl'] < 1):
             frame = cv2.resize(
                 frame,
@@ -1899,7 +2056,7 @@ def PlayVideo_ext(video_dict,display_dict,location,crop=None):
     for f in range(display_dict['start'],display_dict['stop']):
         ret, frame = cap.read() #read frame
         if ret == True:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame = _frame_to_tracking_channel(frame, video_dict)
             if (video_dict['dsmpl'] < 1):
                 frame = cv2.resize(
                     frame,
