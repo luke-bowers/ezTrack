@@ -59,13 +59,10 @@ warnings.filterwarnings("ignore")
 
 def _frame_to_tracking_channel(frame, video_dict):
     """
-    Convert a BGR frame to the single channel used for tracking (gray or red).
-    If video_dict.get('use_red_channel', False) is True, returns the red channel;
-    otherwise returns grayscale. Return value is 2D, same dtype/shape semantics
-    as grayscale for downstream resize, crop, diff, mask, display.
+    Convert a BGR frame to grayscale for tracking. Return value is 2D, same
+    dtype/shape semantics as grayscale for downstream resize, crop, diff,
+    mask, display.
     """
-    if video_dict.get('use_red_channel', False):
-        return frame[:, :, 2].copy()
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 def _preprocess_tracking_channel(channel, tracking_params):
