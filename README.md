@@ -68,6 +68,7 @@ This configures a git filter so that when you `git add` a notebook, its outputs 
 
 # New Feature Alerts:
 
+- 02/08/2026: Location tracking **processing revised**: frame–reference difference is thresholded to a **binary mask** with optional preprocessing (Gaussian blur, CLAHE). Morphological **open/close** and wire removal run on the mask; **connected-component blobs** are filtered by **min/max blob area** and the position is the **centroid of the selected blob** (largest, or nearest to prior when `use_window` is on)—replacing raw intensity-weighted center of mass for more robust tracking. Optional **live preview** and **video export** during analysis.
 - 04/11/2021: ezTrack now has **algorithm for removing wires** in the location tracking module.
 - 07/20/2020: ezTrack now supports **spatial downsampling** of videos! You can reduce the resolution of the video to greatly speed processing. Processing high-definition videos on older laptops/desktops can be slow, but by downsampling, processing speeds are much faster.
 - 07/19/2020: Location tracking module now allows user to **manually define frame numbers to be used when selecting reference**. This is useful if baseline portion of video without animal will be used for reference, and resolves issue when alternative video being used for reference is a different length than the video being processed.
@@ -78,7 +79,8 @@ This configures a git filter so that when you `git add` a notebook, its outputs 
 The location tracking module allows for the analysis of a single animal's location on a frame by frame basis. In addition to providing the user the with the ability to crop the portion of the video frame in which the animal will be, it also allows the user to specify regions of interest (e.g. left and right sides) and provides tools to quantify the time spent in each region, as well as distance travelled.  
 ![schematic_lt](../master/Images/LocationTracking_Schematic.png)
 
-NOTE: Due to the way the COM is calculated it is important that the starting frames of the video include the object you are wishing to track, especially when the contrast between shadows and your target object is minimal.
+> [!TIP]
+> Due to the way the COM is calculated it is important that the starting frames of the video include the object you are wishing to track, especially when the contrast between shadows and your target object is minimal.
 
 # Freeze Analysis Module
 
