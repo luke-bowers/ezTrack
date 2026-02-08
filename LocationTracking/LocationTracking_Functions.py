@@ -789,7 +789,7 @@ def Locate(cap,tracking_params,video_dict,prior=None):
     
 ########################################################################################        
 
-def TrackLocation(video_dict, tracking_params, export_tracking_video=False, export_tracking_video_path=None):
+def TrackLocation(video_dict, tracking_params, export_tracking_video=False, export_tracking_video_path=None, show_live_preview=False):
     """ 
     -------------------------------------------------------------------------------------
     
@@ -877,6 +877,9 @@ def TrackLocation(video_dict, tracking_params, export_tracking_video=False, expo
         export_tracking_video_path:: [str], optional
             Output path for the tracking MP4. If None, derived from video_dict['fpath'] as
             {basename}_tracking.mp4. Ignored if export_tracking_video is False.
+        show_live_preview:: [bool], optional
+            If True, show tracking overlay in a window in real time (slows run to video speed).
+            Press 'q' in the window to stop early and return partial results. Default False.
     
     -------------------------------------------------------------------------------------
     Returns:
@@ -923,21 +926,29 @@ def TrackLocation(video_dict, tracking_params, export_tracking_video=False, expo
             X[f] = com[1]
             if f>0:
                 D[f] = np.sqrt((Y[f]-Y[f-1])**2 + (X[f]-X[f-1])**2)
-            # Optionally write frame with tracking overlay to MP4
-            if export_tracking_video and frame is not None:
+            # Optionally build overlay frame for export and/or live preview
+            if (export_tracking_video or show_live_preview) and frame is not None:
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
                 markposition = (int(com[1]), int(com[0]))
                 cv2.drawMarker(img=frame_bgr, position=markposition, color=(0, 255, 0),
                               markerType=cv2.MARKER_CROSS, markerSize=15, thickness=2)
-                if writer is None:
-                    height, width = frame.shape[0], frame.shape[1]
-                    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-                    writer = cv2.VideoWriter(out_path, fourcc, out_fps, (width, height), True)
-                    if not writer.isOpened():
-                        writer.release()
-                        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*'mp4v'), out_fps, (width, height), True)
-                if writer is not None and writer.isOpened():
-                    writer.write(frame_bgr)
+                if export_tracking_video:
+                    if writer is None:
+                        height, width = frame.shape[0], frame.shape[1]
+                        fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                        writer = cv2.VideoWriter(out_path, fourcc, out_fps, (width, height), True)
+                        if not writer.isOpened():
+                            writer.release()
+                            writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*'mp4v'), out_fps, (width, height), True)
+                    if writer is not None and writer.isOpened():
+                        writer.write(frame_bgr)
+                if show_live_preview:
+                    cv2.imshow('tracking preview', frame_bgr)
+                    delay_ms = max(1, int(1000.0 / out_fps))
+                    key = cv2.waitKey(delay_ms) & 0xFF
+                    if key == ord('q'):
+                        X, Y, D = X[:f + 1], Y[:f + 1], D[:f + 1]
+                        break
         else:
             #if no frame is detected
             f = f-1
@@ -949,6 +960,8 @@ def TrackLocation(video_dict, tracking_params, export_tracking_video=False, expo
     if writer is not None:
         writer.release()
         print('Tracking video exported: {}\n'.format(out_path))
+    if show_live_preview:
+        cv2.destroyWindow('tracking preview')
     #release video
     cap.release()
     time.sleep(.2) #allow printing
