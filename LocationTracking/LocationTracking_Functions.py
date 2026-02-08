@@ -789,7 +789,7 @@ def Locate(cap,tracking_params,video_dict,prior=None):
     
 ########################################################################################        
 
-def TrackLocation(video_dict,tracking_params):
+def TrackLocation(video_dict, tracking_params, export_tracking_video=False, export_tracking_video_path=None):
     """ 
     -------------------------------------------------------------------------------------
     
@@ -870,6 +870,13 @@ def TrackLocation(video_dict,tracking_params):
                            the animal is darker than the background. 
                 'rmv_wire' : True/False, indicating whether to use wire removal function.  [bool] 
                 'wire_krn' : size of kernel used for morphological opening to remove wire. [int]    
+        
+        export_tracking_video:: [bool], optional
+            If True, write an MP4 with the tracking overlay (mouse position marker on each frame)
+            during the same pass as analysis. No second playback step. Default False.
+        export_tracking_video_path:: [str], optional
+            Output path for the tracking MP4. If None, derived from video_dict['fpath'] as
+            {basename}_tracking.mp4. Ignored if export_tracking_video is False.
     
     -------------------------------------------------------------------------------------
     Returns:
@@ -893,6 +900,13 @@ def TrackLocation(video_dict,tracking_params):
     Y = np.zeros(cap_max - video_dict['start'])
     D = np.zeros(cap_max - video_dict['start'])
 
+    # Optional: write MP4 with tracking overlay during this pass (no second playback)
+    writer = None
+    out_fps = cap.get(cv2.CAP_PROP_FPS) or 20.0
+    out_path = export_tracking_video_path
+    if export_tracking_video and out_path is None:
+        out_path = os.path.splitext(video_dict['fpath'])[0] + '_tracking.mp4'
+
     #Loop through frames to detect frame by frame differences
     time.sleep(.2) #allow printing
     for f in tqdm(range(len(D))):
@@ -909,6 +923,21 @@ def TrackLocation(video_dict,tracking_params):
             X[f] = com[1]
             if f>0:
                 D[f] = np.sqrt((Y[f]-Y[f-1])**2 + (X[f]-X[f-1])**2)
+            # Optionally write frame with tracking overlay to MP4
+            if export_tracking_video and frame is not None:
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                markposition = (int(com[1]), int(com[0]))
+                cv2.drawMarker(img=frame_bgr, position=markposition, color=(0, 255, 0),
+                              markerType=cv2.MARKER_CROSS, markerSize=15, thickness=2)
+                if writer is None:
+                    height, width = frame.shape[0], frame.shape[1]
+                    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                    writer = cv2.VideoWriter(out_path, fourcc, out_fps, (width, height), True)
+                    if not writer.isOpened():
+                        writer.release()
+                        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*'mp4v'), out_fps, (width, height), True)
+                if writer is not None and writer.isOpened():
+                    writer.write(frame_bgr)
         else:
             #if no frame is detected
             f = f-1
@@ -917,6 +946,9 @@ def TrackLocation(video_dict,tracking_params):
             D = D[:f] #Amend length of D vector
             break   
             
+    if writer is not None:
+        writer.release()
+        print('Tracking video exported: {}\n'.format(out_path))
     #release video
     cap.release()
     time.sleep(.2) #allow printing
