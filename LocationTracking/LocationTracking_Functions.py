@@ -949,6 +949,14 @@ def TrackLocation(video_dict, tracking_params, export_tracking_video=False, expo
                     if key == ord('q'):
                         X, Y, D = X[:f + 1], Y[:f + 1], D[:f + 1]
                         break
+                    # Stop if user closed the preview window
+                    try:
+                        if cv2.getWindowProperty('tracking preview', cv2.WND_PROP_VISIBLE) < 1:
+                            X, Y, D = X[:f + 1], Y[:f + 1], D[:f + 1]
+                            break
+                    except cv2.error:
+                        X, Y, D = X[:f + 1], Y[:f + 1], D[:f + 1]
+                        break
         else:
             #if no frame is detected
             f = f-1
@@ -961,7 +969,10 @@ def TrackLocation(video_dict, tracking_params, export_tracking_video=False, expo
         writer.release()
         print('Tracking video exported: {}\n'.format(out_path))
     if show_live_preview:
-        cv2.destroyWindow('tracking preview')
+        try:
+            cv2.destroyWindow('tracking preview')
+        except cv2.error:
+            pass  # window may already be closed by user
     #release video
     cap.release()
     time.sleep(.2) #allow printing
@@ -982,8 +993,9 @@ def TrackLocation(video_dict, tracking_params, export_tracking_video=False, expo
     })
     
     #add region of interest info
-    df = ROI_Location(video_dict, df) 
-    if video_dict['region_names'] is not None:
+    df = ROI_Location(video_dict, df)
+    if (video_dict.get('region_names') is not None and
+            all(r in df.columns for r in video_dict['region_names'])):
         print('Defining transitions...')
         df['ROI_location'] = ROI_linearize(df[video_dict['region_names']])
         df['ROI_transition'] = ROI_transitions(df['ROI_location'])
@@ -1344,7 +1356,9 @@ def ROI_Location(video_dict, location):
     
     """
     
-    if video_dict['region_names'] == None:
+    if video_dict.get('region_names') is None:
+        return location
+    if 'roi_stream' not in video_dict or video_dict.get('roi_stream') is None:
         return location
 
     #Create ROI Masks
